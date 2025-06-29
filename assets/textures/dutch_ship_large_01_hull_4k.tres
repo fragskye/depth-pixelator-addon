@@ -1,0 +1,12 @@
+[gd_resource type="ORMMaterial3D" load_steps=4 format=3 uid="uid://i07umf77y1bn"]
+
+[ext_resource type="Texture2D" uid="uid://bii4fmnx8jmbp" path="res://assets/textures/dutch_ship_large_01_hull_diff_4k.jpg" id="1_6tdaj"]
+[ext_resource type="Texture2D" uid="uid://cmiaq3kdr8vvf" path="res://assets/textures/dutch_ship_large_01_hull_nor_gl_4k.jpg" id="2_vhwej"]
+[ext_resource type="Texture2D" uid="uid://dc563mqd4bjdi" path="res://assets/textures/dutch_ship_large_01_hull_arm_4k.jpg" id="3_0awil"]
+
+[resource]
+cull_mode = 2
+albedo_texture = ExtResource("1_6tdaj")
+orm_texture = ExtResource("3_0awil")
+normal_enabled = true
+normal_texture = ExtResource("2_vhwej")

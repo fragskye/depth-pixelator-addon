@@ -1,0 +1,69 @@
+[gd_scene load_steps=9 format=3 uid="uid://dpi31ddrsbho4"]
+
+[ext_resource type="PackedScene" uid="uid://ccreov3o6bq3m" path="res://assets/dutch_ship_large_01_4k.gltf" id="1_5hfv0"]
+[ext_resource type="Script" uid="uid://bt7gaijlweoud" path="res://addons/depth_pixelator/compositor_effect/depth_pixelator_effect.gd" id="1_m0rpm"]
+[ext_resource type="Script" uid="uid://ccalet4uvpe66" path="res://freecam.gd" id="2_0bhed"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0bhed"]
+sky_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+ground_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
+
+[sub_resource type="Sky" id="Sky_m0rpm"]
+sky_material = SubResource("ProceduralSkyMaterial_0bhed")
+
+[sub_resource type="Environment" id="Environment_c6xj6"]
+background_mode = 2
+sky = SubResource("Sky_m0rpm")
+tonemap_mode = 2
+sdfgi_enabled = true
+glow_enabled = true
+
+[sub_resource type="CompositorEffect" id="CompositorEffect_m0rpm"]
+resource_local_to_scene = false
+resource_name = ""
+enabled = true
+effect_callback_type = 1
+access_resolved_color = false
+access_resolved_depth = true
+needs_motion_vectors = false
+needs_normal_roughness = false
+script = ExtResource("1_m0rpm")
+pixel_layer_count = 5
+pixel_scale_per_layer = 0.5
+pixel_layer_blend = 0.5
+pixel_near_distance = 500.0
+pixel_far_distance = 0.0
+pixel_downsample_buffer_minimum = 1
+pixel_distance_curve = 100.0
+pixel_downsample_method = 1
+debug_mode = 0
+debug_debug_downsample_buffer_index = 0
+debug_downsample_buffer_iteration_limit = 10
+metadata/_custom_type_script = "uid://bt7gaijlweoud"
+
+[sub_resource type="Compositor" id="Compositor_0bhed"]
+compositor_effects = Array[CompositorEffect]([SubResource("CompositorEffect_m0rpm")])
+
+[node name="Demo" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_c6xj6")
+compositor = SubResource("Compositor_0bhed")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.866025, -0.433013, 0.25, 0, 0.5, 0.866025, -0.5, 0.75, -0.433013, 0, 0, 0)
+shadow_enabled = true
+directional_shadow_split_1 = 0.2
+directional_shadow_split_2 = 0.4
+directional_shadow_split_3 = 0.6
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 50.0
+
+[node name="dutch_ship_large_01_4k" parent="." instance=ExtResource("1_5hfv0")]
+
+[node name="Freecam" type="Node3D" parent="."]
+transform = Transform3D(-4.37114e-08, 0, 1, 0, 1, 0, -1, 0, -4.37114e-08, 5, 5, 0)
+script = ExtResource("2_0bhed")
+metadata/_custom_type_script = "uid://ccalet4uvpe66"
+
+[node name="Camera3D" type="Camera3D" parent="Freecam"]

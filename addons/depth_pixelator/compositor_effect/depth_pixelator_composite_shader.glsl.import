@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b4lwe3pk8je32"
+path="res://.godot/imported/depth_pixelator_composite_shader.glsl-dd6ff0c9b175f5966c206acf3aeea17a.res"
+
+[deps]
+
+source_file="res://addons/depth_pixelator/compositor_effect/depth_pixelator_composite_shader.glsl"
+dest_files=["res://.godot/imported/depth_pixelator_composite_shader.glsl-dd6ff0c9b175f5966c206acf3aeea17a.res"]
+
+[params]
+
