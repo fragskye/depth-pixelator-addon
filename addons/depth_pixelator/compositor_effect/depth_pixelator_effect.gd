@@ -9,12 +9,13 @@ const MAX_LAYER_COUNT: int = 10
 @export_group("Depth Pixelation", "pixel_")
 @export_range(0, MAX_LAYER_COUNT, 1) var pixel_layer_count: int = 3
 @export_range(0.5, 1.0, 0.001) var pixel_scale_per_layer: float = 0.5
+@export_exp_easing("positive_only") var pixel_distance_curve: float = 1.0
 @export_range(0.0, 1.0, 0.01) var pixel_layer_blend: float = 0.5
 @export var pixel_near_distance: float = 5.0
 @export var pixel_far_distance: float = 15.0
+@export_flags("Sample All Layers") var pixel_flags: int = 0x1
 @export_group("Downsample Layers", "pixel_")
 @export var pixel_downsample_buffer_minimum: int = 0
-@export var pixel_distance_curve: float = 1.0
 @export_enum("Mean Average", "Median Average", "Brightest", "Darkest", "Nearest") var pixel_downsample_method: int = 0
 @export_group("Debug", "debug_")
 @export_enum("Disabled", "Depth Splits", "Downsample Buffer", "Downsample Buffer Depth") var debug_mode: int = 0
@@ -36,7 +37,7 @@ var _pixel_scale_per_layer: float = 0.0
 var _downsample_layers: Array[DownsampleLayer] = []
 
 func _init() -> void:
-	effect_callback_type = CompositorEffect.EFFECT_CALLBACK_TYPE_POST_OPAQUE
+	effect_callback_type = CompositorEffect.EFFECT_CALLBACK_TYPE_POST_SKY
 	access_resolved_depth = true
 	rd = RenderingServer.get_rendering_device()
 	RenderingServer.call_on_render_thread(_init_compute)
@@ -187,9 +188,9 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	push_constant.encode_s32(0x24, pixel_downsample_buffer_minimum)
 	push_constant.encode_s32(0x28, 0)
 	push_constant.encode_s32(0x2C, pixel_downsample_method)
-	push_constant.encode_s32(0x30, debug_mode)
-	push_constant.encode_s32(0x34, debug_debug_downsample_buffer_index)
-	push_constant.encode_s32(0x38, 0)
+	push_constant.encode_s32(0x30, pixel_flags)
+	push_constant.encode_s32(0x34, debug_mode)
+	push_constant.encode_s32(0x38, debug_debug_downsample_buffer_index)
 	push_constant.encode_s32(0x3C, 0)
 	
 	var scene_data_buffer: RID = render_scene_data.get_uniform_buffer()
@@ -243,7 +244,7 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 			var uniform0_2: RDUniform = RDUniform.new()
 			uniform0_2.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			uniform0_2.binding = 2
-			uniform0_2.add_id(nearest_sampler if pixel_downsample_method == 4 else linear_sampler)
+			uniform0_2.add_id(nearest_sampler)
 			uniform0_2.add_id(src_color_buffer)
 			var uniform0_3: RDUniform = RDUniform.new()
 			uniform0_3.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -306,15 +307,25 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	
 	var uniform_set1_uniforms: Array[RDUniform] = []
 	for i: int in MAX_LAYER_COUNT:
-		var uniform: RDUniform = RDUniform.new()
-		uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		uniform.binding = i
-		uniform.add_id(nearest_sampler)
+		var uniform_color: RDUniform = RDUniform.new()
+		uniform_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		uniform_color.binding = i * 2
+		uniform_color.add_id(nearest_sampler)
 		if i < _pixel_layer_count:
-			uniform.add_id(_downsample_layers[i].color_buffers[mini(debug_downsample_buffer_iteration_limit - 1, i)])
+			uniform_color.add_id(_downsample_layers[i].color_buffers[mini(debug_downsample_buffer_iteration_limit - 1, i)])
 		else:
-			uniform.add_id(render_scene_buffers.get_color_layer(0))
-		uniform_set1_uniforms.push_back(uniform)
+			uniform_color.add_id(render_scene_buffers.get_color_layer(0))
+		uniform_set1_uniforms.push_back(uniform_color)
+		
+		var uniform_depth: RDUniform = RDUniform.new()
+		uniform_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		uniform_depth.binding = i * 2 + 1
+		uniform_depth.add_id(nearest_sampler)
+		if i < _pixel_layer_count:
+			uniform_depth.add_id(_downsample_layers[i].depth_buffers[mini(debug_downsample_buffer_iteration_limit - 1, i)])
+		else:
+			uniform_depth.add_id(render_scene_buffers.get_depth_layer(0))
+		uniform_set1_uniforms.push_back(uniform_depth)
 	var uniform_set1: RID = UniformSetCacheRD.get_cache(composite_shader, 1, uniform_set1_uniforms)
 	
 	var uniform2_0: RDUniform = RDUniform.new()

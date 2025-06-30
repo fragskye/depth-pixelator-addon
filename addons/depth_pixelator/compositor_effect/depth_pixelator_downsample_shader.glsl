@@ -1,44 +1,11 @@
 #[compute]
 #version 450
 
-#define PROCESS_SAMPLE(sample_buf_idx, sample_uv, sample_cs, sample_col) \
-	vec4 sample_col = vec4(0.0); \
-	if (sample_buf_idx == params.downsample_buffer_index || sample_buf_idx == params.downsample_buffer_index - 1) { \
-		depth = max(depth, sample_cs.z); \
-		sample_col = textureLod(src_color_texture, sample_uv, 0.0); \
-		if (params.downsample_method == 0) { \
-			color += sample_col; \
-		} else if (params.downsample_method == 1) { \
-			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-			if (brightness > brightest) { \
-				brightest_color = sample_col; \
-				brightest = brightness; \
-			} \
-			if (brightness < darkest) { \
-				darkest_color = sample_col; \
-				darkest = brightness; \
-			} \
-		} else if (params.downsample_method == 2) { \
-			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-			if (brightness > brightest) { \
-				color = sample_col; \
-				brightest = brightness; \
-			} \
-		} else if (params.downsample_method == 3) { \
-			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-			if (brightness < darkest) { \
-				color = sample_col; \
-				darkest = brightness; \
-			} \
-		} \
-	}
-
-#define SUM_SAMPLE(sample_cs, sample_col) \
-	if (sample_col.a > 0.0 && dot(abs(sample_col.rgb - brightest_color.rgb), vec3(1.0)) > 1e-6 && dot(abs(sample_col.rgb - darkest_color.rgb), vec3(1.0)) > 1e-6) { \
-		color += sample_col; \
-	}
-
 #define MAX_VIEWS 2
+
+#define FLAG_SAMPLE_ALL_LAYERS (1 << 0)
+
+#define FLAG_TEST(flag) ((params.flags & (flag)) != 0)
 
 const float infinity = 1.0 / 0.0;
 
@@ -55,9 +22,9 @@ layout(push_constant, std430) uniform Params {
 	int downsample_buffer_minimum;
 	int downsample_buffer_index;
 	int downsample_method;
+	int flags;
 	int debug_mode;
 	int debug_buffer_index;
-	int pad_0x38;
 	int pad_0x3C;
 } params;
 
@@ -186,6 +153,51 @@ int cs_to_buf_idx(vec4 pos_cs) {
 	return int(floor(params.downsample_buffer_minimum + frac * float(params.downsample_buffer_count - params.downsample_buffer_minimum)));
 }
 
+#define PROCESS_SAMPLE(sample_buf_idx, sample_uv, sample_cs, sample_col) \
+	vec4 sample_col = vec4(0.0); \
+	if (sample_buf_idx == params.downsample_buffer_index || sample_buf_idx == params.downsample_buffer_index - 1) { \
+		depth = max(depth, sample_cs.z); \
+		sample_col = textureLod(src_color_texture, sample_uv, 0.0); \
+		if (depth <= 1e-6) { \
+			sample_col = vec4(0.0); \
+		} \
+		if (params.downsample_method == 0) { \
+			color.rgb += sample_col.rgb * sample_col.a; \
+			color.a += sample_col.a; \
+		} else if (params.downsample_method == 1) { \
+			if (sample_col.a > 0.0) { \
+				float brightness = dot(sample_col.rgb, vec3(0.333333)); \
+				if (brightness > brightest) { \
+					brightest_color = sample_col; \
+					brightest = brightness; \
+				} \
+				if (brightness < darkest) { \
+					darkest_color = sample_col; \
+					darkest = brightness; \
+				} \
+			} \
+		} else if (params.downsample_method == 2) { \
+			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
+			if (brightness > brightest) { \
+				color = sample_col; \
+				brightest = brightness; \
+			} \
+		} else if (params.downsample_method == 3) { \
+			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
+			if (brightness < darkest) { \
+				color = sample_col; \
+				darkest = brightness; \
+			} \
+		} \
+	}
+
+#define SUM_SAMPLE(count, sample_cs, sample_col) \
+	color.a += sample_col.a; \
+	if (sample_col.a > 0.0 && dot(abs(sample_col.rgb - brightest_color.rgb), vec3(1.0)) > 1e-6 && dot(abs(sample_col.rgb - darkest_color.rgb), vec3(1.0)) > 1e-6) { \
+		color.rgb += sample_col.rgb * sample_col.a; \
+		count += sample_col.a; \
+	}
+
 void main() {
     ivec2 size = ivec2(params.raster_size);
     ivec2 src_size = ivec2(params.src_size);
@@ -251,27 +263,36 @@ void main() {
 		}
 	} else {
 		if (params.downsample_method == 1) {
-			SUM_SAMPLE(sample_0_cs, sample_0_col)
-			SUM_SAMPLE(sample_1_cs, sample_1_col)
-			SUM_SAMPLE(sample_2_cs, sample_2_col)
-			SUM_SAMPLE(sample_3_cs, sample_3_col)
-			if (color.a <= 1e-6) {
-				color = (darkest_color + brightest_color) * 0.5;
+			float count = 0.0;
+			SUM_SAMPLE(count, sample_0_cs, sample_0_col)
+			SUM_SAMPLE(count, sample_1_cs, sample_1_col)
+			SUM_SAMPLE(count, sample_2_cs, sample_2_col)
+			SUM_SAMPLE(count, sample_3_cs, sample_3_col)
+			color.a /= 4.0;
+			if (count > 0.0) {
+				color.rgb /= count;
+			} else {
+				if (darkest_color.a > 0.0) {
+					if (brightest_color.a > 0.0) {
+						color.rgb = darkest_color.rgb * darkest_color.a + brightest_color.rgb * brightest_color.a;
+						color.rgb /= darkest_color.a + brightest_color.a;
+					} else {
+						color.rgb = darkest_color.rgb;
+					}
+				} else if (brightest_color.a > 0.0) {
+					color.rgb = brightest_color.rgb;
+				}
 			}
 		}
 	}
 	
 	if (color.a > 0.0) {
-		if (params.downsample_method <= 1) {
+		if (params.downsample_method == 0) {
 			color.rgb /= color.a;
-			color.a = 1.0;
+			color.a *= 0.25;
 		}
 	} else {
 		color = vec4(0.0, 0.0, 0.0, 0.0);
-	}
-	
-	if (params.debug_mode == 3) {
-		color = vec4(vec3(depth), 1.0);
 	}
 	
 	imageStore(dst_color_image, uvi, color);
