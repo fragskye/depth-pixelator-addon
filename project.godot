@@ -25,6 +25,13 @@ gdscript/warnings/unsafe_method_access=1
 gdscript/warnings/unsafe_cast=1
 gdscript/warnings/unsafe_call_argument=1
 
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/size/mode=4
+window/stretch/mode="viewport"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/depth_pixelator/plugin.cfg")

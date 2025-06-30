@@ -142,51 +142,48 @@ vec4 uv_to_cs(vec2 uv) {
 	return uvz_to_cs(uv, fragment_depth);
 }
 
-int cs_to_buf_idx(vec4 pos_cs) {
+float cs_to_buf_pos(vec4 pos_cs) {
 	vec3 pos_vs = cs_to_vs(pos_cs);
 	float frac = pow((-pos_vs.z - params.pixel_near) / (params.pixel_far - params.pixel_near), params.pixel_distance_curve); // Depth along view direction, not world-space distance
 	if (frac <= 0.0) {
-		return params.downsample_buffer_minimum;
+		return float(params.downsample_buffer_minimum);
 	} else if (frac >= 1.0) {
-		return params.downsample_buffer_count;
+		return float(params.downsample_buffer_count);
 	}
-	return int(floor(params.downsample_buffer_minimum + frac * float(params.downsample_buffer_count - params.downsample_buffer_minimum)));
+	return float(params.downsample_buffer_minimum) + frac * float(params.downsample_buffer_count - params.downsample_buffer_minimum);
 }
 
-#define PROCESS_SAMPLE(sample_buf_idx, sample_uv, sample_cs, sample_col) \
+#define PROCESS_SAMPLE(sample_buf_floor, sample_uv, sample_cs, sample_col) \
 	vec4 sample_col = vec4(0.0); \
-	if (sample_buf_idx == params.downsample_buffer_index || sample_buf_idx == params.downsample_buffer_index - 1) { \
-		depth = max(depth, sample_cs.z); \
+	if (sample_buf_floor == params.downsample_buffer_index || sample_buf_floor == params.downsample_buffer_index - 1) { \
 		sample_col = textureLod(src_color_texture, sample_uv, 0.0); \
-		if (depth <= 1e-6) { \
+		if (sample_cs.z <= 1e-6) { \
 			sample_col = vec4(0.0); \
+		} \
+		color.a += sample_col.a; \
+		if (sample_cs.z > depth) { \
+			depth = sample_cs.z; \
+			if (params.downsample_method == 4 && sample_col.a > 0.0) { \
+				color.rgb = sample_col.rgb; \
+			} \
 		} \
 		if (params.downsample_method == 0) { \
 			color.rgb += sample_col.rgb * sample_col.a; \
-			color.a += sample_col.a; \
 		} else if (params.downsample_method == 1) { \
-			if (sample_col.a > 0.0) { \
-				float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-				if (brightness > brightest) { \
-					brightest_color = sample_col; \
-					brightest = brightness; \
-				} \
-				if (brightness < darkest) { \
-					darkest_color = sample_col; \
-					darkest = brightness; \
-				} \
+			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
+			if (brightness > brightest) { \
+				color.rgb = sample_col.rgb; \
+				brightest = brightness; \
 			} \
 		} else if (params.downsample_method == 2) { \
 			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-			if (brightness > brightest) { \
-				color = sample_col; \
-				brightest = brightness; \
+			if (brightness < darkest) { \
+				color.rgb = sample_col.rgb; \
+				darkest = brightness; \
 			} \
 		} else if (params.downsample_method == 3) { \
-			float brightness = dot(sample_col.rgb, vec3(0.333333)); \
-			if (brightness < darkest) { \
-				color = sample_col; \
-				darkest = brightness; \
+			if (sample_col.a > 0.0) { \
+				color.rgb = sample_col.rgb; \
 			} \
 		} \
 	}
@@ -210,87 +207,33 @@ void main() {
 	vec4 color = vec4(0.0);
 	float brightest = -infinity;
 	float darkest = infinity;
-	vec4 brightest_color = vec4(0.0);
-	vec4 darkest_color = vec4(0.0);
 	float depth = 0.0;
 	
-	vec2 scale = params.src_size / params.raster_size;
-	ivec2 src_uvi = ivec2(floor(uvi / params.raster_size * params.src_size));
+	vec2 dst_uv_min = vec2(uvi) / size;
+	vec2 dst_uv_max = vec2(uvi + vec2(1.0)) / size;
+	ivec2 src_uvi_min = ivec2(dst_uv_min * src_size);
+	ivec2 src_uvi_max = ivec2(dst_uv_max * src_size);
+	ivec2 src_uvi_size = src_uvi_max - src_uvi_min;
+	int src_total = src_uvi_size.x * src_uvi_size.y;
 	
-	vec2 uv_offset = params.downsample_method == 4 ? vec2(0.5) : vec2(0.0);
-	
-	/*vec2 sample_0_uv = (floor(vec2(uvi * scale)) + 0.5) / src_size;
-	vec2 sample_1_uv = (floor(vec2(uvi * scale + vec2(1.0, 0.0))) + 0.5) / src_size;
-	vec2 sample_2_uv = (floor(vec2(uvi * scale + vec2(0.0, 1.0))) + 0.5) / src_size;
-	vec2 sample_3_uv = (floor(vec2(uvi * scale + vec2(1.0))) + 0.5) / src_size;/**/
-	/*ec2 sample_0_uv = vec2(src_uvi + vec2(0.25)) / params.src_size;
-	vec2 sample_1_uv = vec2(src_uvi + vec2(0.75, 0.25)) / params.src_size;
-	vec2 sample_2_uv = vec2(src_uvi + vec2(0.25, 0.75)) / params.src_size;
-	vec2 sample_3_uv = vec2(src_uvi + vec2(0.75)) / params.src_size;/**/
-	/*vec2 sample_0_uv = vec2(src_uvi) / params.src_size;
-	vec2 sample_1_uv = vec2(src_uvi + vec2(1.0, 0.0)) / params.src_size;
-	vec2 sample_2_uv = vec2(src_uvi + vec2(0.0, 1.0)) / params.src_size;
-	vec2 sample_3_uv = vec2(src_uvi + vec2(1.0)) / params.src_size;/**/
-	/*vec2 sample_0_uv = vec2(uvi + vec2(0.25)) / size;
-	vec2 sample_1_uv = vec2(uvi + vec2(0.75, 0.25)) / size;
-	vec2 sample_2_uv = vec2(uvi + vec2(0.25, 0.75)) / size;
-	vec2 sample_3_uv = vec2(uvi + vec2(0.75)) / size;/**/
-	vec2 sample_0_uv = vec2(uvi + uv_offset + vec2(0.0)) / size;
-	vec2 sample_1_uv = vec2(uvi + uv_offset + vec2(1.0, 0.0)) / size;
-	vec2 sample_2_uv = vec2(uvi + uv_offset + vec2(0.0, 1.0)) / size;
-	vec2 sample_3_uv = vec2(uvi + uv_offset + vec2(1.0)) / size;/**/
-	vec4 sample_0_cs = uv_to_cs(sample_0_uv);
-	vec4 sample_1_cs = uv_to_cs(sample_1_uv);
-	vec4 sample_2_cs = uv_to_cs(sample_2_uv);
-	vec4 sample_3_cs = uv_to_cs(sample_3_uv);
-	int sample_0_buf_idx = cs_to_buf_idx(sample_0_cs);
-	int sample_1_buf_idx = cs_to_buf_idx(sample_1_cs);
-	int sample_2_buf_idx = cs_to_buf_idx(sample_2_cs);
-	int sample_3_buf_idx = cs_to_buf_idx(sample_3_cs);
-	PROCESS_SAMPLE(sample_0_buf_idx, sample_0_uv, sample_0_cs, sample_0_col)
-	PROCESS_SAMPLE(sample_1_buf_idx, sample_1_uv, sample_1_cs, sample_1_col)
-	PROCESS_SAMPLE(sample_2_buf_idx, sample_2_uv, sample_2_cs, sample_2_col)
-	PROCESS_SAMPLE(sample_3_buf_idx, sample_3_uv, sample_3_cs, sample_3_col)
-	if (params.downsample_method == 4) {
-		if (sample_0_col.a > 0.0) {
-			color = sample_0_col;
-		} else if (sample_1_col.a > 0.0) {
-			color = sample_1_col;
-		} else if (sample_2_col.a > 0.0) {
-			color = sample_2_col;
-		} else if (sample_3_col.a > 0.0) {
-			color = sample_3_col;
-		}
-	} else {
-		if (params.downsample_method == 1) {
-			float count = 0.0;
-			SUM_SAMPLE(count, sample_0_cs, sample_0_col)
-			SUM_SAMPLE(count, sample_1_cs, sample_1_col)
-			SUM_SAMPLE(count, sample_2_cs, sample_2_col)
-			SUM_SAMPLE(count, sample_3_cs, sample_3_col)
-			color.a /= 4.0;
-			if (count > 0.0) {
-				color.rgb /= count;
-			} else {
-				if (darkest_color.a > 0.0) {
-					if (brightest_color.a > 0.0) {
-						color.rgb = darkest_color.rgb * darkest_color.a + brightest_color.rgb * brightest_color.a;
-						color.rgb /= darkest_color.a + brightest_color.a;
-					} else {
-						color.rgb = darkest_color.rgb;
-					}
-				} else if (brightest_color.a > 0.0) {
-					color.rgb = brightest_color.rgb;
-				}
-			}
+	int step_y = 1;
+	for (int src_uvi_y = (src_uvi_min.y + src_uvi_max.y) / 2; src_uvi_y >= src_uvi_min.y && src_uvi_y <= src_uvi_max.y; src_uvi_y += ((step_y % 2 == 1) ? 1 : -1) * (step_y++)) {
+		int step_x = 1;
+		for (int src_uvi_x = (src_uvi_min.x + src_uvi_max.x) / 2; src_uvi_x >= src_uvi_min.x && src_uvi_x <= src_uvi_max.x; src_uvi_x += ((step_x % 2 == 1) ? 1 : -1) * (step_x++)) {
+			ivec2 src_uvi = ivec2(src_uvi_x, src_uvi_y);
+			vec2 src_uv = vec2(src_uvi) / src_size;
+			
+			vec4 sample_cs = uv_to_cs(src_uv);
+			float sample_buf_floor = floor(cs_to_buf_pos(sample_cs));
+			PROCESS_SAMPLE(sample_buf_floor, src_uv, sample_cs, sample_col)
 		}
 	}
 	
 	if (color.a > 0.0) {
 		if (params.downsample_method == 0) {
 			color.rgb /= color.a;
-			color.a *= 0.25;
 		}
+		color.a /= src_total;
 	} else {
 		color = vec4(0.0, 0.0, 0.0, 0.0);
 	}

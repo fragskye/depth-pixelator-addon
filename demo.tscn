@@ -23,24 +23,24 @@ resource_local_to_scene = false
 resource_name = ""
 enabled = true
 effect_callback_type = 2
-access_resolved_color = false
+access_resolved_color = true
 access_resolved_depth = true
 needs_motion_vectors = false
-needs_normal_roughness = false
+needs_normal_roughness = true
 needs_separate_specular = false
 script = ExtResource("1_m0rpm")
-pixel_layer_count = 10
-pixel_scale_per_layer = 0.75
-pixel_distance_curve = 5.0
-pixel_layer_blend = 0.5
-pixel_near_distance = 25.0
+pixel_layer_count = 7
+pixel_scale_per_layer = 0.5
+pixel_distance_curve = 100.0
+pixel_layer_blend = 0.0
+pixel_near_distance = 100.0
 pixel_far_distance = 0.0
 pixel_flags = 1
-pixel_downsample_buffer_minimum = 1
-pixel_downsample_method = 1
+pixel_downsample_buffer_minimum = 0
+pixel_downsample_method = 0
 debug_mode = 0
-debug_debug_downsample_buffer_index = 5
-debug_downsample_buffer_iteration_limit = 10
+debug_debug_downsample_buffer_index = 15
+debug_downsample_buffer_iteration_limit = 16
 metadata/_custom_type_script = "uid://bt7gaijlweoud"
 
 [sub_resource type="Compositor" id="Compositor_0bhed"]
@@ -53,7 +53,7 @@ environment = SubResource("Environment_c6xj6")
 compositor = SubResource("Compositor_0bhed")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(-0.866025, -0.433013, 0.25, 0, 0.5, 0.866025, -0.5, 0.75, -0.433013, 0, 0, 0)
+transform = Transform3D(-0.965926, -0.0990458, 0.239118, 0, 0.92388, 0.382683, -0.258819, 0.369644, -0.892399, 0, 0, 0)
 shadow_enabled = true
 directional_shadow_split_1 = 0.2
 directional_shadow_split_2 = 0.4

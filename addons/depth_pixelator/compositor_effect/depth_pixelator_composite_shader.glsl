@@ -18,9 +18,9 @@ layout(push_constant, std430) uniform Params {
 	float pixel_far;
 	float pixel_blend;
 	float pixel_distance_curve;
-	int downsample_color_buffer_count;
-	int downsample_color_buffer_minimum;
-	int downsample_color_buffer_index;
+	int downsample_buffer_count;
+	int downsample_buffer_minimum;
+	int downsample_buffer_index;
 	int downsample_method;
 	int flags;
 	int debug_mode;
@@ -31,7 +31,7 @@ layout(push_constant, std430) uniform Params {
 layout(rgba16f, set = 0, binding = 0) uniform image2D color_image;
 layout(set = 0, binding = 1) uniform sampler2D depth_texture;
 
-//# downsample_color_buffer_UNIFORMS
+//#uniform_buffer
 layout(set = 1, binding = 0) uniform sampler2D downsample_color_buffer_0;
 layout(set = 1, binding = 1) uniform sampler2D downsample_depth_buffer_0;
 layout(set = 1, binding = 2) uniform sampler2D downsample_color_buffer_1;
@@ -52,6 +52,18 @@ layout(set = 1, binding = 16) uniform sampler2D downsample_color_buffer_8;
 layout(set = 1, binding = 17) uniform sampler2D downsample_depth_buffer_8;
 layout(set = 1, binding = 18) uniform sampler2D downsample_color_buffer_9;
 layout(set = 1, binding = 19) uniform sampler2D downsample_depth_buffer_9;
+layout(set = 1, binding = 20) uniform sampler2D downsample_color_buffer_10;
+layout(set = 1, binding = 21) uniform sampler2D downsample_depth_buffer_10;
+layout(set = 1, binding = 22) uniform sampler2D downsample_color_buffer_11;
+layout(set = 1, binding = 23) uniform sampler2D downsample_depth_buffer_11;
+layout(set = 1, binding = 24) uniform sampler2D downsample_color_buffer_12;
+layout(set = 1, binding = 25) uniform sampler2D downsample_depth_buffer_12;
+layout(set = 1, binding = 26) uniform sampler2D downsample_color_buffer_13;
+layout(set = 1, binding = 27) uniform sampler2D downsample_depth_buffer_13;
+layout(set = 1, binding = 28) uniform sampler2D downsample_color_buffer_14;
+layout(set = 1, binding = 29) uniform sampler2D downsample_depth_buffer_14;
+layout(set = 1, binding = 30) uniform sampler2D downsample_color_buffer_15;
+layout(set = 1, binding = 31) uniform sampler2D downsample_depth_buffer_15;
 
 // from https://github.com/godotengine/godot/blob/9a1def8da1279f60e86bcdb740c30ac6293e4cc8/servers/rendering/renderer_rd/shaders/scene_data_inc.glsl#L15-L76
 struct SceneData {
@@ -157,32 +169,28 @@ vec3 ws_to_vs(vec3 pos_ws) {
 	return ws_to_vs(pos_ws, 1.0);
 }
 
-int cs_to_buf_idx(vec4 pos_cs) {
-	vec3 pos_vs = cs_to_vs(pos_cs);
-	float frac = (-pos_vs.z - params.pixel_near) / (params.pixel_far - params.pixel_near); // Depth along view direction, not world-space distance
-	if (frac <= 0.0) {
-		return 0;
-	} else if (frac >= 1.0) {
-		return params.downsample_color_buffer_count;
-	}
-	return int(ceil(frac * float(params.downsample_color_buffer_count)));
-}
-
 float cs_to_buf_pos(vec4 pos_cs) {
 	vec3 pos_vs = cs_to_vs(pos_cs);
 	float frac = pow((-pos_vs.z - params.pixel_near) / (params.pixel_far - params.pixel_near), params.pixel_distance_curve); // Depth along view direction, not world-space distance
 	if (frac <= 0.0) {
-		return float(params.downsample_color_buffer_minimum);
+		return float(params.downsample_buffer_minimum);
 	} else if (frac >= 1.0) {
-		return float(params.downsample_color_buffer_count);
+		return float(params.downsample_buffer_count);
 	}
-	return float(params.downsample_color_buffer_minimum) + frac * float(params.downsample_color_buffer_count - params.downsample_color_buffer_minimum);
+	return float(params.downsample_buffer_minimum) + frac * float(params.downsample_buffer_count - params.downsample_buffer_minimum);
 }
 
 #define SAMPLE_BUFFER(index, pos, amt, col, color_buffer, depth_buffer) \
 	vec4 col = textureLod(color_buffer, uv, 0.0); \
 	float pos = cs_to_buf_pos(uvz_to_cs(uv, textureLod(depth_buffer, uv, 0.0).r));\
-	float amt = col.a > smoothstep(0.0, -1.0, pos - (index + 1)) ? smoothstep(1.0, 1.0 - params.pixel_blend, abs(pos - (index + 1))) : 0.0; \
+	float amt = col.a > 0.0 ? smoothstep(1.0, 1.0 - params.pixel_blend, abs(pos - (index + 1))) : 0.0; \
+
+//col.a > smoothstep(0.0, -1.0, pos - (index + 1)) ?  : 0.0
+
+#define BLEND_SIMPLE(idx, buffer_a, buffer_b) \
+	case idx: \
+		color.rgb = mix(textureLod(buffer_a, uv, 0.0).rgb, textureLod(buffer_b, uv, 0.0).rgb, buf_frac); \
+		break;
 
 #define DEBUG_COLOR(idx, col) \
 	case idx: \
@@ -211,29 +219,38 @@ void main() {
 	
 	float fragment_depth = textureLod(depth_texture, uv, 0.0).r;
 	vec4 fragment_cs = uvz_to_cs(uv, fragment_depth);
-	int buf_idx = cs_to_buf_idx(fragment_cs);
 	float buf_pos = cs_to_buf_pos(fragment_cs);
 	int buf_floor = int(floor(buf_pos));
-	float buf_frac = params.pixel_blend <= 0.0 ? (buf_pos == buf_floor ? 0.0 : 1.0) : smoothstep(0.0, 1.0, (buf_pos - buf_floor) / params.pixel_blend);
+	// FIXME: Why is the sky's buf_pos NaN?
+	float buf_frac = params.pixel_blend <= 0.0 ? ((fragment_depth < 1e-6 || abs(buf_pos - buf_floor) < 0.5) ? 0.0 : 1.0) : smoothstep(0.0, 1.0, (buf_pos - buf_floor - 0.5) / params.pixel_blend);
 	
-	vec4 color = vec4(1.0, 0.0, 0.5, 1.0);
+	vec4 color = vec4(1.0, 0.0, 1.0, 1.0);
 	
 	if (params.debug_mode == 1) {
 		switch (buf_floor) {
+			//#debug_color
 			DEBUG_COLOR(0, vec4(1.0, 0.0, 0.0, 1.0))
-			DEBUG_COLOR(1, vec4(1.0, 0.5, 0.0, 1.0))
-			DEBUG_COLOR(2, vec4(1.0, 1.0, 0.0, 1.0))
-			DEBUG_COLOR(3, vec4(0.5, 1.0, 0.0, 1.0))
-			DEBUG_COLOR(4, vec4(0.0, 1.0, 0.0, 1.0))
-			DEBUG_COLOR(5, vec4(0.0, 1.0, 0.5, 1.0))
-			DEBUG_COLOR(6, vec4(0.0, 1.0, 1.0, 1.0))
-			DEBUG_COLOR(7, vec4(0.0, 0.5, 1.0, 1.0))
-			DEBUG_COLOR(8, vec4(0.0, 0.0, 1.0, 1.0))
-			DEBUG_COLOR(9, vec4(0.5, 0.0, 1.0, 1.0))
-			DEBUG_COLOR(10, vec4(1.0, 0.0, 1.0, 1.0))
+			DEBUG_COLOR(1, vec4(1.0, 0.25, 0.0, 1.0))
+			DEBUG_COLOR(2, vec4(1.0, 0.5, 0.0, 1.0))
+			DEBUG_COLOR(3, vec4(1.0, 0.75, 0.0, 1.0))
+			DEBUG_COLOR(4, vec4(1.0, 1.0, 0.0, 1.0))
+			DEBUG_COLOR(5, vec4(0.75, 1.0, 0.0, 1.0))
+			DEBUG_COLOR(6, vec4(0.5, 1.0, 0.0, 1.0))
+			DEBUG_COLOR(7, vec4(0.25, 1.0, 0.0, 1.0))
+			DEBUG_COLOR(8, vec4(0.0, 1.0, 0.0, 1.0))
+			DEBUG_COLOR(9, vec4(0.0, 1.0, 0.25, 1.0))
+			DEBUG_COLOR(10, vec4(0.0, 1.0, 0.5, 1.0))
+			DEBUG_COLOR(11, vec4(0.0, 1.0, 0.75, 1.0))
+			DEBUG_COLOR(12, vec4(0.0, 1.0, 1.0, 1.0))
+			DEBUG_COLOR(13, vec4(0.0, 0.75, 1.0, 1.0))
+			DEBUG_COLOR(14, vec4(0.0, 0.5, 1.0, 1.0))
+			DEBUG_COLOR(15, vec4(0.0, 0.25, 1.0, 1.0))
 		}
 	} else if (params.debug_mode == 2) {
+		color = vec4(vec3(buf_frac), 1.0);
+	} else if (params.debug_mode == 3) {
 		switch (params.debug_buffer_index) {
+			//#debug_color_texture
 			case 0:
 				color = imageLoad(color_image, uvi);
 				break;
@@ -247,9 +264,16 @@ void main() {
 			DEBUG_COLOR_TEXTURE(8, downsample_color_buffer_7)
 			DEBUG_COLOR_TEXTURE(9, downsample_color_buffer_8)
 			DEBUG_COLOR_TEXTURE(10, downsample_color_buffer_9)
+			DEBUG_COLOR_TEXTURE(11, downsample_color_buffer_10)
+			DEBUG_COLOR_TEXTURE(12, downsample_color_buffer_11)
+			DEBUG_COLOR_TEXTURE(13, downsample_color_buffer_12)
+			DEBUG_COLOR_TEXTURE(14, downsample_color_buffer_13)
+			DEBUG_COLOR_TEXTURE(15, downsample_color_buffer_14)
+			DEBUG_COLOR_TEXTURE(16, downsample_color_buffer_15)
 		}
-	} else if (params.debug_mode == 3) {
+	} else if (params.debug_mode == 4) {
 		switch (params.debug_buffer_index) {
+			//#debug_depth_texture
 			DEBUG_DEPTH_TEXTURE(0, depth_texture)
 			DEBUG_DEPTH_TEXTURE(1, downsample_depth_buffer_0)
 			DEBUG_DEPTH_TEXTURE(2, downsample_depth_buffer_1)
@@ -261,9 +285,16 @@ void main() {
 			DEBUG_DEPTH_TEXTURE(8, downsample_depth_buffer_7)
 			DEBUG_DEPTH_TEXTURE(9, downsample_depth_buffer_8)
 			DEBUG_DEPTH_TEXTURE(10, downsample_depth_buffer_9)
+			DEBUG_DEPTH_TEXTURE(11, downsample_depth_buffer_10)
+			DEBUG_DEPTH_TEXTURE(12, downsample_depth_buffer_11)
+			DEBUG_DEPTH_TEXTURE(13, downsample_depth_buffer_12)
+			DEBUG_DEPTH_TEXTURE(14, downsample_depth_buffer_13)
+			DEBUG_DEPTH_TEXTURE(15, downsample_depth_buffer_14)
+			DEBUG_DEPTH_TEXTURE(16, downsample_depth_buffer_15)
 		}
 	} else {
 		if (FLAG_TEST(FLAG_SAMPLE_ALL_LAYERS)) {
+			//#sample_buffer
 			color = imageLoad(color_image, uvi);
 			SAMPLE_BUFFER(0, pos_0, amt_0, col_0, downsample_color_buffer_0, downsample_depth_buffer_0)
 			SAMPLE_BUFFER(1, pos_1, amt_1, col_1, downsample_color_buffer_1, downsample_depth_buffer_1)
@@ -275,7 +306,20 @@ void main() {
 			SAMPLE_BUFFER(7, pos_7, amt_7, col_7, downsample_color_buffer_7, downsample_depth_buffer_7)
 			SAMPLE_BUFFER(8, pos_8, amt_8, col_8, downsample_color_buffer_8, downsample_depth_buffer_8)
 			SAMPLE_BUFFER(9, pos_9, amt_9, col_9, downsample_color_buffer_9, downsample_depth_buffer_9)
+			SAMPLE_BUFFER(10, pos_10, amt_10, col_10, downsample_color_buffer_10, downsample_depth_buffer_10)
+			SAMPLE_BUFFER(11, pos_11, amt_11, col_11, downsample_color_buffer_11, downsample_depth_buffer_11)
+			SAMPLE_BUFFER(12, pos_12, amt_12, col_12, downsample_color_buffer_12, downsample_depth_buffer_12)
+			SAMPLE_BUFFER(13, pos_13, amt_13, col_13, downsample_color_buffer_13, downsample_depth_buffer_13)
+			SAMPLE_BUFFER(14, pos_14, amt_14, col_14, downsample_color_buffer_14, downsample_depth_buffer_14)
+			SAMPLE_BUFFER(15, pos_15, amt_15, col_15, downsample_color_buffer_15, downsample_depth_buffer_15)
 			if (params.pixel_near < params.pixel_far) {
+				//#blend_all_reverse
+				color.rgb = mix(color.rgb, col_15.rgb, amt_15);
+				color.rgb = mix(color.rgb, col_14.rgb, amt_14);
+				color.rgb = mix(color.rgb, col_13.rgb, amt_13);
+				color.rgb = mix(color.rgb, col_12.rgb, amt_12);
+				color.rgb = mix(color.rgb, col_11.rgb, amt_11);
+				color.rgb = mix(color.rgb, col_10.rgb, amt_10);
 				color.rgb = mix(color.rgb, col_9.rgb, amt_9);
 				color.rgb = mix(color.rgb, col_8.rgb, amt_8);
 				color.rgb = mix(color.rgb, col_7.rgb, amt_7);
@@ -287,6 +331,7 @@ void main() {
 				color.rgb = mix(color.rgb, col_1.rgb, amt_1);
 				color.rgb = mix(color.rgb, col_0.rgb, amt_0);
 			} else {
+				//#blend_all
 				color.rgb = mix(color.rgb, col_0.rgb, amt_0);
 				color.rgb = mix(color.rgb, col_1.rgb, amt_1);
 				color.rgb = mix(color.rgb, col_2.rgb, amt_2);
@@ -297,41 +342,37 @@ void main() {
 				color.rgb = mix(color.rgb, col_7.rgb, amt_7);
 				color.rgb = mix(color.rgb, col_8.rgb, amt_8);
 				color.rgb = mix(color.rgb, col_9.rgb, amt_9);
+				color.rgb = mix(color.rgb, col_10.rgb, amt_10);
+				color.rgb = mix(color.rgb, col_11.rgb, amt_11);
+				color.rgb = mix(color.rgb, col_12.rgb, amt_12);
+				color.rgb = mix(color.rgb, col_13.rgb, amt_13);
+				color.rgb = mix(color.rgb, col_14.rgb, amt_14);
+				color.rgb = mix(color.rgb, col_15.rgb, amt_15);
 			}
 		} else {
+			color.a = 1.0;
 			switch (buf_floor) {
+				//#blend_simple
 				case 0:
-					color = mix(imageLoad(color_image, uvi), textureLod(downsample_color_buffer_0, uv, 0.0), buf_frac);
+					color.rgb = mix(imageLoad(color_image, uvi).rgb, textureLod(downsample_color_buffer_0, uv, 0.0).rgb, buf_frac);
 					break;
-				case 1:
-					color = mix(textureLod(downsample_color_buffer_0, uv, 0.0), textureLod(downsample_color_buffer_1, uv, 0.0), buf_frac);
-					break;
-				case 2:
-					color = mix(textureLod(downsample_color_buffer_1, uv, 0.0), textureLod(downsample_color_buffer_2, uv, 0.0), buf_frac);
-					break;
-				case 3:
-					color = mix(textureLod(downsample_color_buffer_2, uv, 0.0), textureLod(downsample_color_buffer_3, uv, 0.0), buf_frac);
-					break;
-				case 4:
-					color = mix(textureLod(downsample_color_buffer_3, uv, 0.0), textureLod(downsample_color_buffer_4, uv, 0.0), buf_frac);
-					break;
-				case 5:
-					color = mix(textureLod(downsample_color_buffer_4, uv, 0.0), textureLod(downsample_color_buffer_5, uv, 0.0), buf_frac);
-					break;
-				case 6:
-					color = mix(textureLod(downsample_color_buffer_5, uv, 0.0), textureLod(downsample_color_buffer_6, uv, 0.0), buf_frac);
-					break;
-				case 7:
-					color = mix(textureLod(downsample_color_buffer_6, uv, 0.0), textureLod(downsample_color_buffer_7, uv, 0.0), buf_frac);
-					break;
-				case 8:
-					color = mix(textureLod(downsample_color_buffer_7, uv, 0.0), textureLod(downsample_color_buffer_8, uv, 0.0), buf_frac);
-					break;
-				case 9:
-					color = mix(textureLod(downsample_color_buffer_8, uv, 0.0), textureLod(downsample_color_buffer_9, uv, 0.0), buf_frac);
-					break;
-				case 10:
-					color = textureLod(downsample_color_buffer_9, uv, 0.0);
+				BLEND_SIMPLE(1, downsample_color_buffer_0, downsample_color_buffer_1)
+				BLEND_SIMPLE(2, downsample_color_buffer_1, downsample_color_buffer_2)
+				BLEND_SIMPLE(3, downsample_color_buffer_2, downsample_color_buffer_3)
+				BLEND_SIMPLE(4, downsample_color_buffer_3, downsample_color_buffer_4)
+				BLEND_SIMPLE(5, downsample_color_buffer_4, downsample_color_buffer_5)
+				BLEND_SIMPLE(6, downsample_color_buffer_5, downsample_color_buffer_6)
+				BLEND_SIMPLE(7, downsample_color_buffer_6, downsample_color_buffer_7)
+				BLEND_SIMPLE(8, downsample_color_buffer_7, downsample_color_buffer_8)
+				BLEND_SIMPLE(9, downsample_color_buffer_8, downsample_color_buffer_9)
+				BLEND_SIMPLE(10, downsample_color_buffer_9, downsample_color_buffer_10)
+				BLEND_SIMPLE(11, downsample_color_buffer_10, downsample_color_buffer_11)
+				BLEND_SIMPLE(12, downsample_color_buffer_11, downsample_color_buffer_12)
+				BLEND_SIMPLE(13, downsample_color_buffer_12, downsample_color_buffer_13)
+				BLEND_SIMPLE(14, downsample_color_buffer_13, downsample_color_buffer_14)
+				BLEND_SIMPLE(15, downsample_color_buffer_14, downsample_color_buffer_15)
+				case 16:
+					color.rgb = textureLod(downsample_color_buffer_15, uv, 0.0).rgb;
 					break;
 			}
 		}
