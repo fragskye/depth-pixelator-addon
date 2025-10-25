@@ -2,13 +2,14 @@
 class_name DepthPixelatorEffect
 extends CompositorEffect
 
+# TODO: Rework shader loading to support codegen so unused downsample buffers aren't included
 const DEPTH_PIXELATOR_DOWNSAMPLE_SHADER: RDShaderFile = preload("res://addons/depth_pixelator/compositor_effect/depth_pixelator_downsample_shader.glsl")
 const DEPTH_PIXELATOR_COMPOSITE_SHADER: RDShaderFile = preload("res://addons/depth_pixelator/compositor_effect/depth_pixelator_composite_shader.glsl")
 const MAX_LAYER_COUNT: int = 16
 
 @export_group("Depth Pixelation", "pixel_")
 @export_range(0, MAX_LAYER_COUNT, 1) var pixel_layer_count: int = 7
-@export_range(0.5, 1.0, 0.001) var pixel_scale_per_layer: float = 0.5
+@export_range(0.5, 1.0, 0.001) var pixel_scale_per_layer: float = 0.6
 @export_exp_easing("positive_only") var pixel_distance_curve: float = 100.0
 @export_range(0.0, 1.0, 0.01) var pixel_layer_blend: float = 0.0
 @export var pixel_near_distance: float = 100.0
@@ -108,7 +109,7 @@ func _create_downsample_layers() -> void:
 	_downsample_layer_views.clear()
 	
 	var color_format: RDTextureFormat = RDTextureFormat.new()
-	color_format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT #RenderingDevice.DATA_FORMAT_A2B10G10R10_UNORM_PACK32 # #RenderingDevice.DATA_FORMAT_B8G8R8A8_UNORM
+	color_format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT
 	color_format.texture_type = RenderingDevice.TEXTURE_TYPE_2D
 	color_format.width = _size.x
 	color_format.height = _size.y
@@ -210,6 +211,9 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	
 	var scene_data_buffer: RID = render_scene_data.get_uniform_buffer()
 	
+	rd.draw_command_begin_label("DepthPixelatorDownsample", Color.WHITE)
+	
+	# Separate the screen into each downsample layer, selecting colors based on depth ranges
 	for view: int in view_count:
 		var downsample_layers: Array[DownsampleLayer] = _downsample_layer_views[view]
 		
@@ -239,24 +243,24 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 			push_constant.encode_s32(0x28, downsample_layer.layer_id + 1) # downsample_buffer_index
 			
 			var uniform_set0_uniforms: Array[RDUniform] = [RDUniform.new(), RDUniform.new(), RDUniform.new(), RDUniform.new()]
-			uniform_set0_uniforms[0].binding = 0
+			uniform_set0_uniforms[0].binding = 0 # dst_color_image
 			uniform_set0_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 			uniform_set0_uniforms[0].add_id(dst_color_buffer)
-			uniform_set0_uniforms[1].binding = 1
+			uniform_set0_uniforms[1].binding = 1 # dst_depth_image
 			uniform_set0_uniforms[1].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 			uniform_set0_uniforms[1].add_id(dst_depth_buffer)
-			uniform_set0_uniforms[2].binding = 2
+			uniform_set0_uniforms[2].binding = 2 # src_color_texture
 			uniform_set0_uniforms[2].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			uniform_set0_uniforms[2].add_id(nearest_sampler)
 			uniform_set0_uniforms[2].add_id(src_color_buffer)
-			uniform_set0_uniforms[3].binding = 3
+			uniform_set0_uniforms[3].binding = 3 # src_depth_texture
 			uniform_set0_uniforms[3].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			uniform_set0_uniforms[3].add_id(nearest_sampler)
 			uniform_set0_uniforms[3].add_id(src_depth_buffer)
 			var uniform_set0: RID = UniformSetCacheRD.get_cache(downsample_shader, 0, uniform_set0_uniforms)
 			
 			var uniform_set1_uniforms: Array[RDUniform] = [RDUniform.new()]
-			uniform_set1_uniforms[0].binding = 0
+			uniform_set1_uniforms[0].binding = 0 # scene
 			uniform_set1_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
 			uniform_set1_uniforms[0].add_id(scene_data_buffer)
 			var uniform_set1: RID = UniformSetCacheRD.get_cache(downsample_shader, 1, uniform_set1_uniforms)
@@ -268,6 +272,8 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 			rd.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
 			rd.compute_list_dispatch(compute_list, downsample_x_groups, downsample_y_groups, downsample_z_groups)
 			rd.compute_list_end()
+	
+	rd.draw_command_end_label()
 	
 	push_constant.encode_float(0x0, size.x)  # raster_size.x
 	push_constant.encode_float(0x4, size.y)  # raster_size.y
@@ -281,14 +287,17 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	var composite_z_groups: int = 1
 	@warning_ignore_restore("integer_division")
 	
+	rd.draw_command_begin_label("DepthPixelatorComposite", Color.WHITE)
+	
+	# Composite the final image, combining all the downsample layers
 	for view: int in view_count:
 		var downsample_layers: Array[DownsampleLayer] = _downsample_layer_views[view]
 		
 		var uniform_set0_uniforms: Array[RDUniform] = [RDUniform.new(), RDUniform.new()]
-		uniform_set0_uniforms[0].binding = 0
+		uniform_set0_uniforms[0].binding = 0 # color_image
 		uniform_set0_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
 		uniform_set0_uniforms[0].add_id(render_scene_buffers.get_color_layer(view))
-		uniform_set0_uniforms[1].binding = 1
+		uniform_set0_uniforms[1].binding = 1 # depth_texture
 		uniform_set0_uniforms[1].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 		uniform_set0_uniforms[1].add_id(nearest_sampler)
 		uniform_set0_uniforms[1].add_id(render_scene_buffers.get_depth_layer(view))
@@ -297,7 +306,7 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 		var uniform_set1_uniforms: Array[RDUniform] = []
 		for i: int in MAX_LAYER_COUNT:
 			var uniform_color: RDUniform = RDUniform.new()
-			uniform_color.binding = i * 2
+			uniform_color.binding = i * 2 # downsample_color_buffer_n
 			uniform_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			uniform_color.add_id(nearest_sampler)
 			if i < _pixel_layer_count:
@@ -307,7 +316,7 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 			uniform_set1_uniforms.push_back(uniform_color)
 			
 			var uniform_depth: RDUniform = RDUniform.new()
-			uniform_depth.binding = i * 2 + 1
+			uniform_depth.binding = i * 2 + 1 # downsample_depth_buffer_n
 			uniform_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
 			uniform_depth.add_id(nearest_sampler)
 			if i < _pixel_layer_count:
@@ -318,7 +327,7 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 		var uniform_set1: RID = UniformSetCacheRD.get_cache(composite_shader, 1, uniform_set1_uniforms)
 		
 		var uniform_set2_uniforms: Array[RDUniform] = [RDUniform.new()]
-		uniform_set2_uniforms[0].binding = 0
+		uniform_set2_uniforms[0].binding = 0 # scene
 		uniform_set2_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
 		uniform_set2_uniforms[0].add_id(scene_data_buffer)
 		var uniform_set2: RID = UniformSetCacheRD.get_cache(composite_shader, 2, uniform_set2_uniforms)
@@ -331,3 +340,17 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 		rd.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
 		rd.compute_list_dispatch(compute_list, composite_x_groups, composite_y_groups, composite_z_groups)
 		rd.compute_list_end()
+	
+	rd.draw_command_end_label()
+
+class DownsampleLayer extends RefCounted:
+	var layer_id: int = 0
+	var color_buffer: RID = RID()
+	var depth_buffer: RID = RID()
+	var layer_data_buffer: RID = RID()
+
+	func free_rids(rd: RenderingDevice) -> void:
+		if color_buffer.is_valid():
+			rd.free_rid(color_buffer)
+		if depth_buffer.is_valid():
+			rd.free_rid(depth_buffer)
