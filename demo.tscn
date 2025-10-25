@@ -37,9 +37,9 @@ pixel_near_distance = 100.0
 pixel_far_distance = 0.0
 pixel_flags = 1
 pixel_downsample_buffer_minimum = 0
-pixel_downsample_method = 0
+pixel_downsample_method = 3
 debug_mode = 0
-debug_debug_downsample_buffer_index = 15
+debug_debug_downsample_buffer_index = 0
 debug_downsample_buffer_iteration_limit = 16
 metadata/_custom_type_script = "uid://bt7gaijlweoud"
 

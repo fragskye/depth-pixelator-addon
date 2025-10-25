@@ -185,8 +185,6 @@ float cs_to_buf_pos(vec4 pos_cs) {
 	float pos = cs_to_buf_pos(uvz_to_cs(uv, textureLod(depth_buffer, uv, 0.0).r));\
 	float amt = col.a > 0.0 ? smoothstep(1.0, 1.0 - params.pixel_blend, abs(pos - (index + 1))) : 0.0; \
 
-//col.a > smoothstep(0.0, -1.0, pos - (index + 1)) ?  : 0.0
-
 #define BLEND_SIMPLE(idx, buffer_a, buffer_b) \
 	case idx: \
 		color.rgb = mix(textureLod(buffer_a, uv, 0.0).rgb, textureLod(buffer_b, uv, 0.0).rgb, buf_frac); \
@@ -379,9 +377,4 @@ void main() {
 	}
 	
 	imageStore(color_image, uvi, color);
-	
-	//vec4 fragment_normal_roughness = normal_roughness_compatibility(textureLod(normal_roughness_texture, uv, 0.0));
-	//vec3 fragment_normal_vs = fragment_normal_roughness.xyz;
-	//vec4 fragment_cs = uvz_to_cs(uv, fragment_depth);
-	//vec3 fragment_vs = cs_to_vs(fragment_cs);
 }

@@ -216,10 +216,8 @@ void main() {
 	ivec2 src_uvi_size = src_uvi_max - src_uvi_min;
 	int src_total = src_uvi_size.x * src_uvi_size.y;
 	
-	int step_y = 1;
-	for (int src_uvi_y = (src_uvi_min.y + src_uvi_max.y) / 2; src_uvi_y >= src_uvi_min.y && src_uvi_y <= src_uvi_max.y; src_uvi_y += ((step_y % 2 == 1) ? 1 : -1) * (step_y++)) {
-		int step_x = 1;
-		for (int src_uvi_x = (src_uvi_min.x + src_uvi_max.x) / 2; src_uvi_x >= src_uvi_min.x && src_uvi_x <= src_uvi_max.x; src_uvi_x += ((step_x % 2 == 1) ? 1 : -1) * (step_x++)) {
+	for (int src_uvi_y = src_uvi_min.y; src_uvi_y < src_uvi_max.y; src_uvi_y++) {
+		for (int src_uvi_x = src_uvi_min.x; src_uvi_x < src_uvi_max.x; src_uvi_x++) {
 			ivec2 src_uvi = ivec2(src_uvi_x, src_uvi_y);
 			vec2 src_uv = vec2(src_uvi) / src_size;
 			
@@ -240,9 +238,4 @@ void main() {
 	
 	imageStore(dst_color_image, uvi, color);
 	imageStore(dst_depth_image, uvi, vec4(depth));
-	
-	//vec4 fragment_normal_roughness = normal_roughness_compatibility(textureLod(normal_roughness_texture, uv, 0.0));
-	//vec3 fragment_normal_vs = fragment_normal_roughness.xyz;
-	//vec4 fragment_cs = uvz_to_cs(uv, fragment_depth);
-	//vec3 fragment_vs = cs_to_vs(fragment_cs);
 }

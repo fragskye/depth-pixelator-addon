@@ -31,10 +31,11 @@ var nearest_sampler: RID = RID()
 var linear_sampler: RID = RID()
 
 var _size: Vector2i = Vector2i.ZERO
+var _view_count: int = 0
 var _pixel_layer_count: int = 0
 var _pixel_scale_per_layer: float = 0.0
 
-var _downsample_layers: Array[DownsampleLayer] = []
+var _downsample_layer_views: Array[Array] = []
 
 func _init() -> void:
 	effect_callback_type = CompositorEffect.EFFECT_CALLBACK_TYPE_POST_SKY
@@ -101,9 +102,10 @@ func _init_compute() -> void:
 	linear_sampler = rd.sampler_create(sampler_state)
 
 func _create_downsample_layers() -> void:
-	for downsample_layer: DownsampleLayer in _downsample_layers:
-		downsample_layer.free_rids(rd)
-	_downsample_layers.clear()
+	for downsample_layers: Array[DownsampleLayer] in _downsample_layer_views:
+		for downsample_layer: DownsampleLayer in downsample_layers:
+			downsample_layer.free_rids(rd)
+	_downsample_layer_views.clear()
 	
 	var color_format: RDTextureFormat = RDTextureFormat.new()
 	color_format.format = RenderingDevice.DATA_FORMAT_R16G16B16A16_SFLOAT #RenderingDevice.DATA_FORMAT_A2B10G10R10_UNORM_PACK32 # #RenderingDevice.DATA_FORMAT_B8G8R8A8_UNORM
@@ -125,18 +127,21 @@ func _create_downsample_layers() -> void:
 	depth_format.mipmaps = 1
 	depth_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT | RenderingDevice.TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT | RenderingDevice.TEXTURE_USAGE_CAN_COPY_TO_BIT | RenderingDevice.TEXTURE_USAGE_INPUT_ATTACHMENT_BIT
 	
-	for i: int in clampi(pixel_layer_count, 0, MAX_LAYER_COUNT):
-		var downsample_layer: DownsampleLayer = DownsampleLayer.new()
-		downsample_layer.layer_id = i
-		color_format.width = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
-		color_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
-		depth_format.width = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
-		depth_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
-		var color_buffer: RID = rd.texture_create(color_format, RDTextureView.new(), [])
-		var depth_buffer: RID = rd.texture_create(depth_format, RDTextureView.new(), [])
-		downsample_layer.color_buffer = color_buffer
-		downsample_layer.depth_buffer = depth_buffer
-		_downsample_layers.push_back(downsample_layer)
+	for view: int in _view_count:
+		var downsample_layers: Array[DownsampleLayer] = []
+		for i: int in clampi(pixel_layer_count, 0, MAX_LAYER_COUNT):
+			var downsample_layer: DownsampleLayer = DownsampleLayer.new()
+			downsample_layer.layer_id = i
+			color_format.width = floori(_size.x * pow(pixel_scale_per_layer,  i+ 1))
+			color_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
+			depth_format.width = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
+			depth_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
+			var color_buffer: RID = rd.texture_create(color_format, RDTextureView.new(), [])
+			var depth_buffer: RID = rd.texture_create(depth_format, RDTextureView.new(), [])
+			downsample_layer.color_buffer = color_buffer
+			downsample_layer.depth_buffer = depth_buffer
+			downsample_layers.push_back(downsample_layer)
+		_downsample_layer_views.push_back(downsample_layers)
 	_pixel_layer_count = clampi(pixel_layer_count, 0, MAX_LAYER_COUNT)
 	_pixel_scale_per_layer = pixel_scale_per_layer
 
@@ -163,170 +168,166 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	if size.x == 0 && size.y == 0:
 		return
 	
+	var view_count: int = render_scene_buffers.get_view_count()
+	
+	var needs_new_downsample_layers: bool = false
+	
 	if _size != size:
 		_size = size
-		_create_downsample_layers()
+		needs_new_downsample_layers = true
+	
+	if _view_count != view_count:
+		_view_count = view_count
+		needs_new_downsample_layers = true
 	
 	if _pixel_layer_count != clampi(pixel_layer_count, 0, MAX_LAYER_COUNT):
-		_create_downsample_layers()
+		needs_new_downsample_layers = true
 	
 	if _pixel_scale_per_layer != pixel_scale_per_layer:
+		needs_new_downsample_layers = true
+	
+	if needs_new_downsample_layers:
 		_create_downsample_layers()
 	
 	var push_constant: PackedByteArray = PackedByteArray()
 	push_constant.resize(64)
-	push_constant.encode_float(0x0, size.x)
-	push_constant.encode_float(0x4, size.y)
-	push_constant.encode_float(0x8, size.x)
-	push_constant.encode_float(0xC, size.y)
-	push_constant.encode_float(0x10, pixel_near_distance)
-	push_constant.encode_float(0x14, pixel_far_distance)
-	push_constant.encode_float(0x18, pixel_layer_blend)
-	push_constant.encode_float(0x1C, pixel_distance_curve)
-	push_constant.encode_s32(0x20, _pixel_layer_count)
-	push_constant.encode_s32(0x24, pixel_downsample_buffer_minimum)
-	push_constant.encode_s32(0x28, 0)
-	push_constant.encode_s32(0x2C, pixel_downsample_method)
-	push_constant.encode_s32(0x30, pixel_flags)
-	push_constant.encode_s32(0x34, debug_mode)
-	push_constant.encode_s32(0x38, debug_debug_downsample_buffer_index)
-	push_constant.encode_s32(0x3C, 0)
+	push_constant.encode_float(0x0, size.x) # raster_size.x
+	push_constant.encode_float(0x4, size.y) # raster_size.y
+	push_constant.encode_float(0x8, size.x) # src_size.x
+	push_constant.encode_float(0xC, size.y) # src_size.y
+	push_constant.encode_float(0x10, pixel_near_distance) # pixel_near
+	push_constant.encode_float(0x14, pixel_far_distance) # pixel_far
+	push_constant.encode_float(0x18, pixel_layer_blend) # pixel_blend
+	push_constant.encode_float(0x1C, pixel_distance_curve) # pixel_distance_curve
+	push_constant.encode_s32(0x20, _pixel_layer_count) # downsample_buffer_count
+	push_constant.encode_s32(0x24, pixel_downsample_buffer_minimum) # downsample_buffer_minimum
+	push_constant.encode_s32(0x28, 0) # downsample_buffer_index
+	push_constant.encode_s32(0x2C, pixel_downsample_method) # downsample_method
+	push_constant.encode_s32(0x30, pixel_flags) # flags
+	push_constant.encode_s32(0x34, debug_mode) # debug_mode
+	push_constant.encode_s32(0x38, debug_debug_downsample_buffer_index) # debug_buffer_index
+	push_constant.encode_s32(0x3C, 0) # pad_0x3C
 	
 	var scene_data_buffer: RID = render_scene_data.get_uniform_buffer()
 	
-	#var view_count: int = render_scene_buffers.get_view_count()
+	for view: int in view_count:
+		var downsample_layers: Array[DownsampleLayer] = _downsample_layer_views[view]
+		
+		var src_color_buffer: RID = render_scene_buffers.get_color_layer(view)
+		var src_depth_buffer: RID = render_scene_buffers.get_depth_layer(view)
+		var src_width: int = size.x
+		var src_height: int = size.y
+		
+		for i: int in downsample_layers.size():
+			var downsample_layer: DownsampleLayer = downsample_layers[i]
+			
+			var dst_color_buffer: RID = downsample_layer.color_buffer
+			var dst_depth_buffer: RID = downsample_layer.depth_buffer
+			var dst_width: int = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
+			var dst_height: int = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
+			
+			@warning_ignore_start("integer_division")
+			var downsample_x_groups: int = (dst_width - 1) / 8 + 1
+			var downsample_y_groups: int = (dst_height - 1) / 8 + 1
+			var downsample_z_groups: int = 1
+			@warning_ignore_restore("integer_division")
+			
+			push_constant.encode_float(0x0, dst_width) # raster_size.x
+			push_constant.encode_float(0x4, dst_height) # raster_size.y
+			push_constant.encode_float(0x8, src_width) # src_size.x
+			push_constant.encode_float(0xC, src_height) # src_size.y
+			push_constant.encode_s32(0x28, downsample_layer.layer_id + 1) # downsample_buffer_index
+			
+			var uniform_set0_uniforms: Array[RDUniform] = [RDUniform.new(), RDUniform.new(), RDUniform.new(), RDUniform.new()]
+			uniform_set0_uniforms[0].binding = 0
+			uniform_set0_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			uniform_set0_uniforms[0].add_id(dst_color_buffer)
+			uniform_set0_uniforms[1].binding = 1
+			uniform_set0_uniforms[1].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+			uniform_set0_uniforms[1].add_id(dst_depth_buffer)
+			uniform_set0_uniforms[2].binding = 2
+			uniform_set0_uniforms[2].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			uniform_set0_uniforms[2].add_id(nearest_sampler)
+			uniform_set0_uniforms[2].add_id(src_color_buffer)
+			uniform_set0_uniforms[3].binding = 3
+			uniform_set0_uniforms[3].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			uniform_set0_uniforms[3].add_id(nearest_sampler)
+			uniform_set0_uniforms[3].add_id(src_depth_buffer)
+			var uniform_set0: RID = UniformSetCacheRD.get_cache(downsample_shader, 0, uniform_set0_uniforms)
+			
+			var uniform_set1_uniforms: Array[RDUniform] = [RDUniform.new()]
+			uniform_set1_uniforms[0].binding = 0
+			uniform_set1_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+			uniform_set1_uniforms[0].add_id(scene_data_buffer)
+			var uniform_set1: RID = UniformSetCacheRD.get_cache(downsample_shader, 1, uniform_set1_uniforms)
+			
+			var compute_list: int = rd.compute_list_begin()
+			rd.compute_list_bind_compute_pipeline(compute_list, downsample_pipeline)
+			rd.compute_list_bind_uniform_set(compute_list, uniform_set0, 0)
+			rd.compute_list_bind_uniform_set(compute_list, uniform_set1, 1)
+			rd.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
+			rd.compute_list_dispatch(compute_list, downsample_x_groups, downsample_y_groups, downsample_z_groups)
+			rd.compute_list_end()
 	
-	# TODO: Multiview
-	#for view: int in view_count:
-	var src_color_buffer: RID = render_scene_buffers.get_color_layer(0)
-	var src_depth_buffer: RID = render_scene_buffers.get_depth_layer(0)
-	var src_width: int = size.x
-	var src_height: int = size.y
+	push_constant.encode_float(0x0, size.x)  # raster_size.x
+	push_constant.encode_float(0x4, size.y)  # raster_size.y
+	push_constant.encode_float(0x8, size.x)  # src_size.x
+	push_constant.encode_float(0xC, size.y) # src_size.y
+	push_constant.encode_s32(0x28, 0) # downsample_buffer_index
 	
-	for i: int in _downsample_layers.size():
-		var downsample_layer: DownsampleLayer = _downsample_layers[i]
+	@warning_ignore_start("integer_division")
+	var composite_x_groups: int = (size.x - 1) / 8 + 1
+	var composite_y_groups: int = (size.y - 1) / 8 + 1
+	var composite_z_groups: int = 1
+	@warning_ignore_restore("integer_division")
+	
+	for view: int in view_count:
+		var downsample_layers: Array[DownsampleLayer] = _downsample_layer_views[view]
 		
-		var dst_color_buffer: RID = downsample_layer.color_buffer
-		var dst_depth_buffer: RID = downsample_layer.depth_buffer
-		var dst_width: int = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
-		var dst_height: int = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
+		var uniform_set0_uniforms: Array[RDUniform] = [RDUniform.new(), RDUniform.new()]
+		uniform_set0_uniforms[0].binding = 0
+		uniform_set0_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+		uniform_set0_uniforms[0].add_id(render_scene_buffers.get_color_layer(view))
+		uniform_set0_uniforms[1].binding = 1
+		uniform_set0_uniforms[1].uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+		uniform_set0_uniforms[1].add_id(nearest_sampler)
+		uniform_set0_uniforms[1].add_id(render_scene_buffers.get_depth_layer(view))
+		var uniform_set0: RID = UniformSetCacheRD.get_cache(composite_shader, 0, uniform_set0_uniforms)
 		
-		var x_groups: int = (dst_width - 1) / 8 + 1
-		var y_groups: int = (dst_height - 1) / 8 + 1
-		var z_groups: int = 1
+		var uniform_set1_uniforms: Array[RDUniform] = []
+		for i: int in MAX_LAYER_COUNT:
+			var uniform_color: RDUniform = RDUniform.new()
+			uniform_color.binding = i * 2
+			uniform_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			uniform_color.add_id(nearest_sampler)
+			if i < _pixel_layer_count:
+				uniform_color.add_id(downsample_layers[i].color_buffer)
+			else:
+				uniform_color.add_id(render_scene_buffers.get_color_layer(view))
+			uniform_set1_uniforms.push_back(uniform_color)
+			
+			var uniform_depth: RDUniform = RDUniform.new()
+			uniform_depth.binding = i * 2 + 1
+			uniform_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+			uniform_depth.add_id(nearest_sampler)
+			if i < _pixel_layer_count:
+				uniform_depth.add_id(downsample_layers[i].depth_buffer)
+			else:
+				uniform_depth.add_id(render_scene_buffers.get_depth_layer(view))
+			uniform_set1_uniforms.push_back(uniform_depth)
+		var uniform_set1: RID = UniformSetCacheRD.get_cache(composite_shader, 1, uniform_set1_uniforms)
 		
-		push_constant.encode_float(0x0, dst_width)
-		push_constant.encode_float(0x4, dst_height)
-		push_constant.encode_float(0x8, src_width)
-		push_constant.encode_float(0xC, src_height)
-		push_constant.encode_s32(0x28, downsample_layer.layer_id + 1)
-		
-		var uniform0_0: RDUniform = RDUniform.new()
-		uniform0_0.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-		uniform0_0.binding = 0
-		uniform0_0.add_id(dst_color_buffer)
-		var uniform0_1: RDUniform = RDUniform.new()
-		uniform0_1.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-		uniform0_1.binding = 1
-		uniform0_1.add_id(dst_depth_buffer)
-		var uniform0_2: RDUniform = RDUniform.new()
-		uniform0_2.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		uniform0_2.binding = 2
-		uniform0_2.add_id(nearest_sampler)
-		uniform0_2.add_id(src_color_buffer)
-		var uniform0_3: RDUniform = RDUniform.new()
-		uniform0_3.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		uniform0_3.binding = 3
-		uniform0_3.add_id(nearest_sampler)
-		uniform0_3.add_id(src_depth_buffer)
-		var uniform_set0: RID = UniformSetCacheRD.get_cache(downsample_shader, 0, [uniform0_0, uniform0_1, uniform0_2, uniform0_3])
-		
-		#if downsample_layer.layer_data_buffer.is_valid():
-		#	rd.free_rid(downsample_layer.layer_data_buffer)
-		#var layer_data_bytes: PackedByteArray = PackedByteArray()
-		#layer_data_bytes.resize(16)
-		#layer_data_bytes.encode_s32(0, downsample_layer.layer_id + 1)
-		#layer_data_bytes.encode_s32(4, 0)
-		#layer_data_bytes.encode_s32(8, 0)
-		#layer_data_bytes.encode_s32(12, 0)
-		#downsample_layer.layer_data_buffer = rd.storage_buffer_create(layer_data_bytes.size(), layer_data_bytes)
-		
-		#var uniform1_0: RDUniform = RDUniform.new()
-		#uniform1_0.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-		#uniform1_0.binding = 0
-		#uniform1_0.add_id(downsample_layer.layer_data_buffer)
-		#var uniform_set1: RID = UniformSetCacheRD.get_cache(downsample_shader, 1, [uniform1_0])
-		
-		var uniform1_0: RDUniform = RDUniform.new()
-		uniform1_0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-		uniform1_0.binding = 0
-		uniform1_0.add_id(scene_data_buffer)
-		var uniform_set1: RID = UniformSetCacheRD.get_cache(downsample_shader, 1, [uniform1_0])
+		var uniform_set2_uniforms: Array[RDUniform] = [RDUniform.new()]
+		uniform_set2_uniforms[0].binding = 0
+		uniform_set2_uniforms[0].uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
+		uniform_set2_uniforms[0].add_id(scene_data_buffer)
+		var uniform_set2: RID = UniformSetCacheRD.get_cache(composite_shader, 2, uniform_set2_uniforms)
 		
 		var compute_list: int = rd.compute_list_begin()
-		rd.compute_list_bind_compute_pipeline(compute_list, downsample_pipeline)
+		rd.compute_list_bind_compute_pipeline(compute_list, composite_pipeline)
 		rd.compute_list_bind_uniform_set(compute_list, uniform_set0, 0)
 		rd.compute_list_bind_uniform_set(compute_list, uniform_set1, 1)
-		#rd.compute_list_bind_uniform_set(compute_list, uniform_set2, 2)
+		rd.compute_list_bind_uniform_set(compute_list, uniform_set2, 2)
 		rd.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
-		rd.compute_list_dispatch(compute_list, x_groups, y_groups, z_groups)
+		rd.compute_list_dispatch(compute_list, composite_x_groups, composite_y_groups, composite_z_groups)
 		rd.compute_list_end()
-	
-	push_constant.encode_float(0x0, size.x)
-	push_constant.encode_float(0x4, size.y)
-	push_constant.encode_float(0x8, size.x)
-	push_constant.encode_float(0xC, size.y)
-	push_constant.encode_s32(0x28, 0)
-	
-	var x_groups: int = (size.x - 1) / 8 + 1
-	var y_groups: int = (size.y - 1) / 8 + 1
-	var z_groups: int = 1
-	
-	var uniform0_0: RDUniform = RDUniform.new()
-	uniform0_0.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	uniform0_0.binding = 0
-	uniform0_0.add_id(render_scene_buffers.get_color_layer(0))
-	var uniform0_1: RDUniform = RDUniform.new()
-	uniform0_1.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-	uniform0_1.binding = 1
-	uniform0_1.add_id(nearest_sampler)
-	uniform0_1.add_id(render_scene_buffers.get_depth_layer(0))
-	var uniform_set0: RID = UniformSetCacheRD.get_cache(composite_shader, 0, [uniform0_0, uniform0_1])
-	
-	var uniform_set1_uniforms: Array[RDUniform] = []
-	for i: int in MAX_LAYER_COUNT:
-		var uniform_color: RDUniform = RDUniform.new()
-		uniform_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		uniform_color.binding = i * 2
-		uniform_color.add_id(nearest_sampler)
-		if i < _pixel_layer_count:
-			uniform_color.add_id(_downsample_layers[i].color_buffer)
-		else:
-			uniform_color.add_id(render_scene_buffers.get_color_layer(0))
-		uniform_set1_uniforms.push_back(uniform_color)
-		
-		var uniform_depth: RDUniform = RDUniform.new()
-		uniform_depth.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
-		uniform_depth.binding = i * 2 + 1
-		uniform_depth.add_id(nearest_sampler)
-		if i < _pixel_layer_count:
-			uniform_depth.add_id(_downsample_layers[i].depth_buffer)
-		else:
-			uniform_depth.add_id(render_scene_buffers.get_depth_layer(0))
-		uniform_set1_uniforms.push_back(uniform_depth)
-	var uniform_set1: RID = UniformSetCacheRD.get_cache(composite_shader, 1, uniform_set1_uniforms)
-	
-	var uniform2_0: RDUniform = RDUniform.new()
-	uniform2_0.uniform_type = RenderingDevice.UNIFORM_TYPE_UNIFORM_BUFFER
-	uniform2_0.binding = 0
-	uniform2_0.add_id(scene_data_buffer)
-	var uniform_set2: RID = UniformSetCacheRD.get_cache(composite_shader, 2, [uniform2_0])
-	
-	var compute_list: int = rd.compute_list_begin()
-	rd.compute_list_bind_compute_pipeline(compute_list, composite_pipeline)
-	rd.compute_list_bind_uniform_set(compute_list, uniform_set0, 0)
-	rd.compute_list_bind_uniform_set(compute_list, uniform_set1, 1)
-	rd.compute_list_bind_uniform_set(compute_list, uniform_set2, 2)
-	rd.compute_list_set_push_constant(compute_list, push_constant, push_constant.size())
-	rd.compute_list_dispatch(compute_list, x_groups, y_groups, z_groups)
-	rd.compute_list_end()
