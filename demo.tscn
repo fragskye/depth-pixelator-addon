@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://ccreov3o6bq3m" path="res://assets/dutch_ship_large_01_4k.gltf" id="1_5hfv0"]
 [ext_resource type="Script" uid="uid://bt7gaijlweoud" path="res://addons/depth_pixelator/compositor_effect/depth_pixelator_effect.gd" id="1_m0rpm"]
-[ext_resource type="Script" uid="uid://ccalet4uvpe66" path="res://freecam.gd" id="2_0bhed"]
+[ext_resource type="PackedScene" uid="uid://bqaxlsx3ic0rc" path="res://freecam.tscn" id="3_m0rpm"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_0bhed"]
 sky_horizon_color = Color(0.662243, 0.671743, 0.686743, 1)
@@ -37,7 +37,7 @@ pixel_near_distance = 100.0
 pixel_far_distance = 0.0
 pixel_flags = 1
 pixel_downsample_buffer_minimum = 0
-pixel_downsample_method = 3
+pixel_downsample_method = 0
 debug_mode = 0
 debug_debug_downsample_buffer_index = 0
 debug_downsample_buffer_iteration_limit = 16
@@ -63,9 +63,5 @@ directional_shadow_max_distance = 50.0
 
 [node name="dutch_ship_large_01_4k" parent="." instance=ExtResource("1_5hfv0")]
 
-[node name="Freecam" type="Node3D" parent="."]
+[node name="Freecam" parent="." instance=ExtResource("3_m0rpm")]
 transform = Transform3D(-4.37114e-08, 0, 1, 0, 1, 0, -1, 0, -4.37114e-08, 5, 5, 0)
-script = ExtResource("2_0bhed")
-metadata/_custom_type_script = "uid://ccalet4uvpe66"
-
-[node name="Camera3D" type="Camera3D" parent="Freecam"]

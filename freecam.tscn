@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://bqaxlsx3ic0rc"]
+
+[ext_resource type="Script" uid="uid://ccalet4uvpe66" path="res://freecam.gd" id="1_pl8aw"]
+
+[node name="Freecam" type="Camera3D"]
+transform = Transform3D(-4.37114e-08, 0, 1, 0, 1, 0, -1, 0, -4.37114e-08, 0, 0, 0)
+script = ExtResource("1_pl8aw")
+metadata/_custom_type_script = "uid://ccalet4uvpe66"
