@@ -7,12 +7,12 @@ const DEPTH_PIXELATOR_COMPOSITE_SHADER: RDShaderFile = preload("res://addons/dep
 const MAX_LAYER_COUNT: int = 16
 
 @export_group("Depth Pixelation", "pixel_")
-@export_range(0, MAX_LAYER_COUNT, 1) var pixel_layer_count: int = 3
+@export_range(0, MAX_LAYER_COUNT, 1) var pixel_layer_count: int = 7
 @export_range(0.5, 1.0, 0.001) var pixel_scale_per_layer: float = 0.5
-@export_exp_easing("positive_only") var pixel_distance_curve: float = 1.0
-@export_range(0.0, 1.0, 0.01) var pixel_layer_blend: float = 0.5
-@export var pixel_near_distance: float = 5.0
-@export var pixel_far_distance: float = 15.0
+@export_exp_easing("positive_only") var pixel_distance_curve: float = 100.0
+@export_range(0.0, 1.0, 0.01) var pixel_layer_blend: float = 0.0
+@export var pixel_near_distance: float = 100.0
+@export var pixel_far_distance: float = 0.0
 @export_flags("Sample All Layers") var pixel_flags: int = 0x1
 @export_group("Downsample Layers", "pixel_")
 @export var pixel_downsample_buffer_minimum: int = 0
