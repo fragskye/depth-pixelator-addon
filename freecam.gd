@@ -63,14 +63,14 @@ func _process(delta: float) -> void:
 	var move_target_z: float = Input.get_axis(&"move_forward", &"move_backward")
 	if Input.is_action_pressed(&"freecam_shift"):
 		if Input.is_action_just_pressed(&"freecam_scroll_up"):
-			_speed_log -= 1.0
-		if Input.is_action_just_pressed(&"freecam_scroll_down"):
-			_speed_log += 1.0
-	else:
-		if Input.is_action_just_pressed(&"freecam_scroll_up"):
 			_fov_log += 1.0
 		if Input.is_action_just_pressed(&"freecam_scroll_down"):
 			_fov_log -= 1.0
+	else:
+		if Input.is_action_just_pressed(&"freecam_scroll_up"):
+			_speed_log -= 1.0
+		if Input.is_action_just_pressed(&"freecam_scroll_down"):
+			_speed_log += 1.0
 	var move_target: Vector3 = Vector3(move_target_x, move_target_y, move_target_z).normalized()
 	speed = pow(speed_base, _speed_log)
 	_move = _move.lerp(speed * move_target, 1.0 - pow(1.0 - smoothing, delta * 60.0))

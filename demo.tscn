@@ -29,18 +29,6 @@ needs_motion_vectors = false
 needs_normal_roughness = true
 needs_separate_specular = false
 script = ExtResource("1_m0rpm")
-pixel_layer_count = 7
-pixel_scale_per_layer = 0.6
-pixel_distance_curve = 100.0
-pixel_layer_blend = 0.0
-pixel_near_distance = 100.0
-pixel_far_distance = 0.0
-pixel_flags = 1
-pixel_downsample_buffer_minimum = 0
-pixel_downsample_method = 0
-debug_mode = 0
-debug_debug_downsample_buffer_index = 0
-debug_downsample_buffer_iteration_limit = 16
 metadata/_custom_type_script = "uid://bt7gaijlweoud"
 
 [sub_resource type="Compositor" id="Compositor_0bhed"]

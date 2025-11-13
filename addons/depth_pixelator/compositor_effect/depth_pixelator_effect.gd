@@ -2,15 +2,10 @@
 class_name DepthPixelatorEffect
 extends CompositorEffect
 
-# TODO: Rework shader loading to support codegen so unused downsample buffers aren't included
-const DEPTH_PIXELATOR_DOWNSAMPLE_SHADER: RDShaderFile = preload("res://addons/depth_pixelator/compositor_effect/depth_pixelator_downsample_shader.glsl")
-const DEPTH_PIXELATOR_COMPOSITE_SHADER: RDShaderFile = preload("res://addons/depth_pixelator/compositor_effect/depth_pixelator_composite_shader.glsl")
-const MAX_LAYER_COUNT: int = 16
-
 @export_group("Depth Pixelation", "pixel_")
-@export_range(0, MAX_LAYER_COUNT, 1) var pixel_layer_count: int = 7
+@export var pixel_layer_count: int = 6
 @export_range(0.5, 1.0, 0.001) var pixel_scale_per_layer: float = 0.6
-@export_exp_easing("positive_only") var pixel_distance_curve: float = 100.0
+@export_exp_easing("positive_only") var pixel_distance_curve: float = 50.0
 @export_range(0.0, 1.0, 0.01) var pixel_layer_blend: float = 0.0
 @export var pixel_near_distance: float = 100.0
 @export var pixel_far_distance: float = 0.0
@@ -20,8 +15,7 @@ const MAX_LAYER_COUNT: int = 16
 @export_enum("Average", "Brightest", "Darkest", "Pixel", "Closest Depth Pixel") var pixel_downsample_method: int = 0
 @export_group("Debug", "debug_")
 @export_enum("Disabled", "Depth Splits", "Depth Fractions", "Downsample Buffer", "Downsample Buffer Depth") var debug_mode: int = 0
-@export_range(0, MAX_LAYER_COUNT, 1) var debug_debug_downsample_buffer_index: int = 0
-@export_range(0, MAX_LAYER_COUNT, 1) var debug_downsample_buffer_iteration_limit: int = MAX_LAYER_COUNT
+@export var debug_debug_downsample_buffer_index: int = 0
 
 var rd: RenderingDevice = null
 var downsample_shader: RID = RID()
@@ -38,11 +32,16 @@ var _pixel_scale_per_layer: float = 0.0
 
 var _downsample_layer_views: Array[Array] = []
 
+
 func _init() -> void:
 	effect_callback_type = CompositorEffect.EFFECT_CALLBACK_TYPE_POST_SKY
 	access_resolved_depth = true
 	rd = RenderingServer.get_rendering_device()
+	_pixel_layer_count = maxi(0, pixel_layer_count)
+	_pixel_scale_per_layer = pixel_scale_per_layer
 	RenderingServer.call_on_render_thread(_init_compute)
+	RenderingServer.call_on_render_thread(_create_downsample_layers)
+
 
 func _init_compute() -> void:
 	if !rd:
@@ -59,7 +58,10 @@ func _init_compute() -> void:
 		composite_shader = RID()
 		composite_pipeline = RID()
 	
-	var downsample_shader_spirv: RDShaderSPIRV = DEPTH_PIXELATOR_DOWNSAMPLE_SHADER.get_spirv()
+	var downsample_shader_source: RDShaderSource = RDShaderSource.new()
+	downsample_shader_source.source_compute = _apply_codegen(DepthPixelatorGLSLDownsample.SOURCE_COMPUTE)
+	
+	var downsample_shader_spirv: RDShaderSPIRV = rd.shader_compile_spirv_from_source(downsample_shader_source)
 	if !downsample_shader_spirv.compile_error_compute.is_empty():
 		push_error("Error getting depth pixelator downsample shader SPIRV")
 		push_error(downsample_shader_spirv.compile_error_compute)
@@ -76,7 +78,9 @@ func _init_compute() -> void:
 		return
 	
 	
-	var composite_shader_spirv: RDShaderSPIRV = DEPTH_PIXELATOR_COMPOSITE_SHADER.get_spirv()
+	var composite_shader_source: RDShaderSource = RDShaderSource.new()
+	composite_shader_source.source_compute = _apply_codegen(DepthPixelatorGLSLComposite.SOURCE_COMPUTE)
+	var composite_shader_spirv: RDShaderSPIRV = rd.shader_compile_spirv_from_source(composite_shader_source)
 	if !composite_shader_spirv.compile_error_compute.is_empty():
 		push_error("Error getting depth pixelator composite shader SPIRV")
 		push_error(composite_shader_spirv.compile_error_compute)
@@ -101,6 +105,7 @@ func _init_compute() -> void:
 	sampler_state.min_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	sampler_state.mag_filter = RenderingDevice.SAMPLER_FILTER_LINEAR
 	linear_sampler = rd.sampler_create(sampler_state)
+
 
 func _create_downsample_layers() -> void:
 	for downsample_layers: Array[DownsampleLayer] in _downsample_layer_views:
@@ -130,21 +135,22 @@ func _create_downsample_layers() -> void:
 	
 	for view: int in _view_count:
 		var downsample_layers: Array[DownsampleLayer] = []
-		for i: int in clampi(pixel_layer_count, 0, MAX_LAYER_COUNT):
+		for i: int in _pixel_layer_count:
 			var downsample_layer: DownsampleLayer = DownsampleLayer.new()
 			downsample_layer.layer_id = i
-			color_format.width = floori(_size.x * pow(pixel_scale_per_layer,  i+ 1))
-			color_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
-			depth_format.width = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
-			depth_format.height = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
+			color_format.width = maxi(1, floori(_size.x * pow(pixel_scale_per_layer,  i + 1)))
+			color_format.height = maxi(1, floori(_size.y * pow(pixel_scale_per_layer, i + 1)))
+			depth_format.width = color_format.width
+			depth_format.height = color_format.height
+			if color_format.width <= 1 || color_format.height <= 1:
+				push_warning("pixel_scale_per_layer ^ pixel_layer_count is resulting in buffers that are too small")
 			var color_buffer: RID = rd.texture_create(color_format, RDTextureView.new(), [])
 			var depth_buffer: RID = rd.texture_create(depth_format, RDTextureView.new(), [])
 			downsample_layer.color_buffer = color_buffer
 			downsample_layer.depth_buffer = depth_buffer
 			downsample_layers.push_back(downsample_layer)
 		_downsample_layer_views.push_back(downsample_layers)
-	_pixel_layer_count = clampi(pixel_layer_count, 0, MAX_LAYER_COUNT)
-	_pixel_scale_per_layer = pixel_scale_per_layer
+
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
@@ -152,6 +158,7 @@ func _notification(what: int) -> void:
 			rd.free_rid(downsample_shader)
 		if composite_shader.is_valid():
 			rd.free_rid(composite_shader)
+
 
 func _render_callback(_effect_callback_type: EffectCallbackType, render_data: RenderData) -> void:
 	if !rd:
@@ -171,23 +178,26 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	
 	var view_count: int = render_scene_buffers.get_view_count()
 	
-	var needs_new_downsample_layers: bool = false
+	var needs_update: bool = false
 	
 	if _size != size:
 		_size = size
-		needs_new_downsample_layers = true
+		needs_update = true
 	
 	if _view_count != view_count:
 		_view_count = view_count
-		needs_new_downsample_layers = true
+		needs_update = true
 	
-	if _pixel_layer_count != clampi(pixel_layer_count, 0, MAX_LAYER_COUNT):
-		needs_new_downsample_layers = true
+	if _pixel_layer_count != maxi(1, pixel_layer_count):
+		needs_update = true
 	
 	if _pixel_scale_per_layer != pixel_scale_per_layer:
-		needs_new_downsample_layers = true
+		needs_update = true
 	
-	if needs_new_downsample_layers:
+	if needs_update:
+		_pixel_layer_count = maxi(1, pixel_layer_count)
+		_pixel_scale_per_layer = pixel_scale_per_layer
+		_init_compute()
 		_create_downsample_layers()
 	
 	var push_constant: PackedByteArray = PackedByteArray()
@@ -230,11 +240,11 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 			var dst_width: int = floori(_size.x * pow(pixel_scale_per_layer, i + 1))
 			var dst_height: int = floori(_size.y * pow(pixel_scale_per_layer, i + 1))
 			
-			@warning_ignore_start("integer_division")
+			@warning_ignore("integer_division")
 			var downsample_x_groups: int = (dst_width - 1) / 8 + 1
+			@warning_ignore("integer_division")
 			var downsample_y_groups: int = (dst_height - 1) / 8 + 1
 			var downsample_z_groups: int = 1
-			@warning_ignore_restore("integer_division")
 			
 			push_constant.encode_float(0x0, dst_width) # raster_size.x
 			push_constant.encode_float(0x4, dst_height) # raster_size.y
@@ -281,11 +291,11 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	push_constant.encode_float(0xC, size.y) # src_size.y
 	push_constant.encode_s32(0x28, 0) # downsample_buffer_index
 	
-	@warning_ignore_start("integer_division")
+	@warning_ignore("integer_division")
 	var composite_x_groups: int = (size.x - 1) / 8 + 1
+	@warning_ignore("integer_division")
 	var composite_y_groups: int = (size.y - 1) / 8 + 1
 	var composite_z_groups: int = 1
-	@warning_ignore_restore("integer_division")
 	
 	rd.draw_command_begin_label("DepthPixelatorComposite", Color.WHITE)
 	
@@ -304,7 +314,7 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 		var uniform_set0: RID = UniformSetCacheRD.get_cache(composite_shader, 0, uniform_set0_uniforms)
 		
 		var uniform_set1_uniforms: Array[RDUniform] = []
-		for i: int in MAX_LAYER_COUNT:
+		for i: int in _pixel_layer_count:
 			var uniform_color: RDUniform = RDUniform.new()
 			uniform_color.binding = i * 2 # downsample_color_buffer_n
 			uniform_color.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
@@ -343,11 +353,88 @@ func _render_callback(_effect_callback_type: EffectCallbackType, render_data: Re
 	
 	rd.draw_command_end_label()
 
+
+func _apply_codegen(source: String) -> String:
+	var version_info: Dictionary = Engine.get_version_info()
+	
+	if version_info.hex >= 0x040600:
+		source = source.replace("//#scene_data_inc", DepthPixelatorGLSLSceneDataInc.SOURCE_4_6)
+	if version_info.hex >= 0x040500:
+		source = source.replace("//#scene_data_inc", DepthPixelatorGLSLSceneDataInc.SOURCE_4_5)
+	elif version_info.hex >= 0x040400:
+		source = source.replace("//#scene_data_inc", DepthPixelatorGLSLSceneDataInc.SOURCE_4_4)
+	elif version_info.hex >= 0x040300:
+		source = source.replace("//#scene_data_inc", DepthPixelatorGLSLSceneDataInc.SOURCE_4_3)
+	
+	if version_info.hex >= 0x040600:
+		source = source.replace("//#scene_data_utils_inc", DepthPixelatorGLSLSceneDataUtilsInc.SOURCE_4_6)
+	elif version_info.hex >= 0x040300:
+		source = source.replace("//#scene_data_utils_inc", DepthPixelatorGLSLSceneDataUtilsInc.SOURCE_4_3)
+	
+	var source_uniform_buffer: String = ""
+	for i: int in _pixel_layer_count:
+		source_uniform_buffer += "
+			layout(set = 1, binding = %d) uniform sampler2D downsample_color_buffer_%d;
+			layout(set = 1, binding = %d) uniform sampler2D downsample_depth_buffer_%d;
+			" % [i * 2, i, i * 2 + 1, i]
+	source = source.replace("//#uniform_buffer", source_uniform_buffer)
+	
+	var source_debug_color_texture: String = ""
+	for i: int in _pixel_layer_count:
+		source_debug_color_texture += "
+			DEBUG_COLOR_TEXTURE(%d, downsample_color_buffer_%d)
+			" % [i + 1, i]
+	source = source.replace("//#debug_color_texture", source_debug_color_texture)
+	
+	var source_debug_depth_texture: String = ""
+	for i: int in _pixel_layer_count:
+		source_debug_depth_texture += "
+			DEBUG_DEPTH_TEXTURE(%d, downsample_depth_buffer_%d)
+			" % [i + 1, i]
+	source = source.replace("//#debug_depth_texture", source_debug_depth_texture)
+	
+	var source_sample_buffer: String = ""
+	for i: int in _pixel_layer_count:
+		source_sample_buffer += "
+			SAMPLE_BUFFER(%d, pos_%d, amt_%d, col_%d, downsample_color_buffer_%d, downsample_depth_buffer_%d)
+			" % [i, i, i, i, i, i]
+	source = source.replace("//#sample_buffer", source_sample_buffer)
+	
+	var source_blend_all_reverse: String = ""
+	for i: int in range(_pixel_layer_count - 1, -1, -1):
+		source_blend_all_reverse += "
+			color.rgb = mix(color.rgb, col_%d.rgb, amt_%d);
+			" % [i, i]
+	source = source.replace("//#blend_all_reverse", source_blend_all_reverse)
+	
+	var source_blend_all: String = ""
+	for i: int in _pixel_layer_count:
+		source_blend_all += "
+			color.rgb = mix(color.rgb, col_%d.rgb, amt_%d);
+			" % [i, i]
+	source = source.replace("//#blend_all", source_blend_all)
+	
+	var source_blend_simple: String = ""
+	for i: int in _pixel_layer_count - 1:
+		source_blend_simple += "
+			BLEND_SIMPLE(%d, downsample_color_buffer_%d, downsample_color_buffer_%d)
+			" % [i + 1, i, i]
+	source_blend_simple += "
+		case %d:
+			color.rgb = textureLod(downsample_color_buffer_%d, uv, 0.0).rgb;
+			break;
+		" % [_pixel_layer_count, _pixel_layer_count - 1]
+	source = source.replace("//#blend_simple", source_blend_simple)
+	
+	return source
+
+
 class DownsampleLayer extends RefCounted:
 	var layer_id: int = 0
 	var color_buffer: RID = RID()
 	var depth_buffer: RID = RID()
 	var layer_data_buffer: RID = RID()
+
 
 	func free_rids(rd: RenderingDevice) -> void:
 		if color_buffer.is_valid():
