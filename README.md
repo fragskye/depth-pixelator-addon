@@ -1,6 +1,6 @@
 # Depth Pixelator
 
-Depth Pixelator is a proof-of-concept addon for Godot 4.4+ which adds a compositor effect that can progressively pixelate the screen based on scene depth. For example, big pixels on close geometry and small pixels on far geometry.
+Depth Pixelator is a proof-of-concept addon for Godot 4.3 to 4.6 which adds a compositor effect that can progressively pixelate the screen based on scene depth. For example, big pixels on close geometry and small pixels on far geometry.
 
 ![cover](.github/assets/preview.png)
 
@@ -36,7 +36,7 @@ This can either act as a pixel style depth-of-field, or a pseudo-view space pixe
 
 ## A note on production-readiness
 
-This is not particularly optimized and was more of a fun experiment. It's certainly usable depending on how you configure it, but VRAM usage may be higher than necessary and the shader does not use any code generation to prune unused uniforms. Keep an eye on the GPU frametime of "Process Post Sky Compositor Effects" in the visual profiler when messing with settings, some scenarios such as downsampling into too small of a buffer may be unexpectedly heavy.
+This is not particularly optimized and was more of a fun experiment. It's certainly usable depending on how you configure it, but VRAM usage may be higher than necessary. Keep an eye on the GPU frametime of "Process Post Sky Compositor Effects" in the visual profiler when messing with settings, some scenarios such as downsampling into too small of a buffer may be unexpectedly heavy.
 
 ## Credits
 
